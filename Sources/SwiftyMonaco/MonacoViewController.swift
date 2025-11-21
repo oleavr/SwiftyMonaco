@@ -154,16 +154,36 @@ public class MonacoViewController: ViewController, WKUIDelegate, WKNavigationDel
         webView.evaluateJavaScript(javascript, in: nil, in: WKContentWorld.page) {
           result in
           switch result {
-          case .failure(let error):
+          case .failure(let error as NSError):
+            let limit = 200
+            let shortJS = String(javascript.prefix(limit))
+
+            var message = "Something went wrong while evaluating the following JavaScript:\n"
+            message += "\(shortJS)\(javascript.count > limit ? "…" : "")\n\n"
+
+            message += "Description: \(error.localizedDescription)\n"
+
+            if let exception = error.userInfo["WKJavaScriptExceptionMessage"] as? String {
+                message += "Exception: \(exception)\n"
+            }
+
+            if let line = error.userInfo["WKJavaScriptExceptionLineNumber"] {
+                message += "Line: \(line)\n"
+            }
+
+            if let column = error.userInfo["WKJavaScriptExceptionColumnNumber"] {
+                message += "Column: \(column)\n"
+            }
+
             #if os(macOS)
             let alert = NSAlert()
-            alert.messageText = "Error"
-            alert.informativeText = "Something went wrong while evaluating \(error.localizedDescription): \(javascript)"
+            alert.messageText = "JavaScript Error"
+            alert.informativeText = message
             alert.alertStyle = .critical
             alert.addButton(withTitle: "OK")
             alert.runModal()
             #else
-            let alert = UIAlertController(title: "Error", message: "Something went wrong while evaluating \(error.localizedDescription)", preferredStyle: .alert)
+            let alert = UIAlertController(title: "Error", message: message, preferredStyle: .alert)
             alert.addAction(.init(title: "OK", style: .default, handler: nil))
             self.present(alert, animated: true, completion: nil)
             #endif
