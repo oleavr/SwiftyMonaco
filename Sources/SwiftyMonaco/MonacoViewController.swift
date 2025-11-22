@@ -22,7 +22,57 @@ public class MonacoViewController: ViewController, WKUIDelegate, WKNavigationDel
     
     public override func loadView() {
         let webConfiguration = WKWebViewConfiguration()
-        webConfiguration.userContentController.add(UpdateTextScriptHandler(self), name: "updateText")
+        let contentController = webConfiguration.userContentController
+
+        contentController.add(UpdateTextScriptHandler(self), name: "updateText")
+
+        let consoleHookJS = """
+        (function() {
+            const orig = {
+                log: console.log,
+                warn: console.warn,
+                error: console.error,
+                info: console.info,
+                debug: console.debug
+            };
+
+            console.log = function () { orig.log.apply(console, arguments); send('log', arguments); };
+            console.warn = function () { orig.warn.apply(console, arguments); send('warn', arguments); };
+            console.error = function () { orig.error.apply(console, arguments); send('error', arguments); };
+            console.info = function () { orig.info.apply(console, arguments); send('info', arguments); };
+            console.debug = function () { orig.debug.apply(console, arguments); send('debug', arguments); };
+
+            window.onerror = (message, source, lineno, colno, error) => {
+                send('uncaughtError', [message, source, lineno, colno, error?.stack ?? null]);
+            };
+
+            window.onunhandledrejection = event => {
+                const reason = event.reason ?? {};
+                send('unhandledRejection', [reason.message ?? String(reason), reason.stack ?? null]);
+            };
+
+            function send(type, args) {
+                try {
+                    window.webkit.messageHandlers.console.postMessage({
+                        type: type,
+                        args: Array.prototype.slice.call(args).map(function(a) {
+                            try { return JSON.stringify(a); } catch (e) { return String(a); }
+                        })
+                    });
+                } catch (e) {
+                }
+            }
+        })();
+        """
+
+        let consoleScript = WKUserScript(
+            source: consoleHookJS,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+        contentController.addUserScript(consoleScript)
+        contentController.add(ConsoleScriptHandler(self), name: "console")
+
         webView = WKWebView(frame: .zero, configuration: webConfiguration)
         webView.uiDelegate = self
         webView.navigationDelegate = self
@@ -278,6 +328,32 @@ private extension MonacoViewController {
             parent.delegate?.monacoView(controller: parent, textDidChange: text)
         }
     }
+
+    final class ConsoleScriptHandler: NSObject, WKScriptMessageHandler {
+        private unowned let parent: MonacoViewController
+
+        init(_ parent: MonacoViewController) {
+            self.parent = parent
+        }
+
+        func userContentController(_ userContentController: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            guard
+                let dict = message.body as? [String: Any],
+                let typeString = dict["type"] as? String,
+                let argsAny = dict["args"] as? [Any]
+            else {
+                return
+            }
+
+            let level = MonacoConsoleMessage.Level(rawValue: typeString) ?? .log
+            let args = argsAny.map { String(describing: $0) }
+
+            let consoleMessage = MonacoConsoleMessage(level: level, arguments: args)
+            parent.delegate?.monacoView(controller: parent,
+                                        didReceiveConsoleMessage: consoleMessage)
+        }
+    }
 }
 
 // MARK: - Delegate
@@ -294,4 +370,20 @@ public protocol MonacoViewControllerDelegate {
     func monacoView(getFontSize controller: MonacoViewController) -> Int
     func monacoView(getTheme controller: MonacoViewController) -> Theme?
     func monacoView(controller: MonacoViewController, textDidChange: String)
+    func monacoView(controller: MonacoViewController, didReceiveConsoleMessage message: MonacoConsoleMessage)
+}
+
+public struct MonacoConsoleMessage {
+    public enum Level: String {
+        case log
+        case warn
+        case error
+        case info
+        case debug
+        case uncaughtError
+        case unhandledRejection
+    }
+
+    public let level: Level
+    public let arguments: [String]
 }

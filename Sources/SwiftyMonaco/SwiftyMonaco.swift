@@ -214,4 +214,10 @@ public class Coordinator: NSObject, MonacoViewControllerDelegate {
     public func monacoView(getTheme controller: MonacoViewController) -> Theme? {
         parent._theme
     }
+
+    public func monacoView(controller: MonacoViewController,
+                           didReceiveConsoleMessage message: MonacoConsoleMessage) {
+        let joined = message.arguments.joined(separator: " ")
+        print("[Monaco JS \(message.level.rawValue)] \(joined)")
+    }
 }
